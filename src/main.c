@@ -48,11 +48,22 @@ static bool g_pump_cycle_phase_on = false;
 static int64_t g_pump_cycle_start_ms = 0;
 static bool g_led_state = false;
 static int64_t g_last_led_toggle_ms = 0;
-
+/*
+ * now_ms
+ * 概要: ESP32 の起動時刻からの経過時間をミリ秒単位で取得する。
+ * 戻り値: ブート後の経過時間[ms]
+ */
 static int64_t now_ms(void) {
     return esp_timer_get_time() / 1000;
 }
 
+/*
+ * gpio_outputs_init
+ * 概要: ポンプ、ファン、LED、モードスイッチの GPIO を初期化する。
+ * 役割:
+ *   - ポンプ・ファン・LED は出力として設定
+ *   - モードスイッチは入力として設定し、プルアップを有効化
+ */
 static void gpio_outputs_init(void) {
     gpio_config_t out_cfg = {
         .pin_bit_mask = (1ULL << PIN_PUMP) | (1ULL << PIN_FAN) | (1ULL << PIN_LED),
@@ -76,6 +87,13 @@ static void gpio_outputs_init(void) {
     gpio_config(&sw_cfg);
 }
 
+/*
+ * adc_init
+ * 概要: 土壌湿度計の ADC を初期化する。
+ * 役割:
+ *   - ADCユニットを生成
+ *   - 乾燥度判定用の土壌センサー入力を有効化する
+ */
 static void adc_init(void) {
     adc_oneshot_unit_init_cfg_t init_config = { .unit_id = ADC_UNIT_1 };
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &s_adc_handle));
@@ -87,6 +105,12 @@ static void adc_init(void) {
     ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, PIN_SOIL_MOISTURE, &chan_config));
 }
 
+/*
+ * read_all_sensors
+ * 概要: DHT22, DS18B20, 土壌センサーから最新の値をまとめて読み取る。
+ * 引数:
+ *   out - 読み取った値を格納する sensor_data_t のポインタ
+ */
 static void read_all_sensors(sensor_data_t *out) {
     dht22_reading_t dht = dht22_read(PIN_DHT);
     if (dht.valid) {
@@ -105,7 +129,16 @@ static void read_all_sensors(sensor_data_t *out) {
     out->soil_dry = (out->soil_raw < SOIL_DRY_THRESHOLD);
 }
 
-/* Water temperature safety control with hysteresis. */
+/*
+ * update_water_safety_control
+ * 概要: 水温が高すぎるときにファンを回し、ポンプを止める安全制御を行う。
+ * 役割:
+ *   - WATER_TEMP_HIGH を超えたら過熱状態とみなす
+ *   - WATER_TEMP_SAFE を下回ると状態を解除する
+ *   - ヒステリシスを使って ON/OFF の切り替えを安定化させる
+ * 引数:
+ *   data - 現在のセンサーデータを参照・更新するポインタ
+ */
 static void update_water_safety_control(sensor_data_t *data) {
     if (data->water_temp_c >= WATER_TEMP_HIGH) {
         g_water_overheat = true;
@@ -123,7 +156,15 @@ static void update_water_safety_control(sensor_data_t *data) {
     }
 }
 
-/* Pump intermittent cycle: 30 min OFF / 5 min ON. */
+/*
+ * update_pump_cycle
+ * 概要: AC電源稼働時にポンプを断続的に回すための周期制御を行う。
+ * 仕様:
+ *   - 30分 OFF / 5分 ON のサイクルで運転
+ *   - 過熱状態のときは強制的に停止する
+ * 引数:
+ *   data - 現在のポンプ状態と制御結果を反映するポインタ
+ */
 static void update_pump_cycle(sensor_data_t *data) {
     int64_t now = now_ms();
     int64_t elapsed = now - g_pump_cycle_start_ms;
@@ -144,7 +185,15 @@ static void update_pump_cycle(sensor_data_t *data) {
     gpio_set_level(PIN_PUMP, data->pump_on ? 1 : 0);
 }
 
-/* Non-blocking blink of the red warning LED while soil is too dry. */
+/*
+ * update_soil_warning_led
+ * 概要: 土が乾燥しているときだけ警告 LED を点滅させる。
+ * 役割:
+ *   - 土が乾いていないときは LED を消灯
+ *   - 乾燥状態では LED を非同期に点滅させる
+ * 引数:
+ *   data - 土壌乾燥状態を確認するセンサーデータ
+ */
 static void update_soil_warning_led(const sensor_data_t *data) {
     if (!data->soil_dry) {
         g_led_state = false;
@@ -159,6 +208,15 @@ static void update_soil_warning_led(const sensor_data_t *data) {
     }
 }
 
+/*
+ * run_ac_adapter_mode
+ * 概要: AC電源モードでの常時監視・制御ループを実行する。
+ * 動作:
+ *   - Wi-Fi AP を起動してブラウザ確認を可能にする
+ *   - 2秒ごとにセンサー値を更新する
+ *   - 水温/土壌状態に応じてファンとポンプを制御する
+ *   - この関数は通常終了しない
+ */
 static void run_ac_adapter_mode(void) {
     ESP_LOGI(TAG, "AC Adapter Mode (continuous)");
     wifi_ap_start(WIFI_SSID, WIFI_PASSWORD);
@@ -167,6 +225,10 @@ static void run_ac_adapter_mode(void) {
     sensor_data_t data = {0};
     read_all_sensors(&data);
     sensor_data_set(&data);
+    /* Initialize pump cycle state */
+    /* センサーの値をデバッグする */
+    ESP_LOGI(TAG, "Initial sensor data: water_temp_c=%.1f, soil_raw=%d",
+             data.water_temp_c, data.soil_raw);
 
     g_pump_cycle_start_ms = now_ms();
     g_pump_cycle_phase_on = false;
@@ -187,6 +249,15 @@ static void run_ac_adapter_mode(void) {
     }
 }
 
+/*
+ * run_mobile_battery_mode_once
+ * 概要: バッテリーモードで 1 サイクルだけ動作し、その後深睡眠に入る。
+ * 動作:
+ *   - 一時的に AP を起動してデータ確認可能にする
+ *   - 15秒の猶予期間後に AP を停止
+ *   - 1回だけ土壌・水温を計測
+ *   - 過熱時はファンで冷却し、その後 30 分間の深睡眠へ移行
+ */
 static void run_mobile_battery_mode_once(void) {
     ESP_LOGI(TAG, "Mobile Battery Mode (deep sleep cycle)");
 
@@ -222,6 +293,14 @@ static void run_mobile_battery_mode_once(void) {
     esp_deep_sleep_start();
 }
 
+/*
+ * app_main
+ * 概要: アプリケーションのエントリーポイント。
+ * 役割:
+ *   - GPIO と ADC, センサードライバを初期化
+ *   - モードスイッチの状態で AC 電源モードまたはバッテリーモードを選択
+ *   - 対応する制御ループを実行する
+ */
 void app_main(void) {
     gpio_outputs_init();
     adc_init();

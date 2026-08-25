@@ -4,7 +4,16 @@
 #include "freertos/task.h"
 #include <string.h>
 
-/* Wait until pin reaches the given level, up to timeout_us. Returns elapsed us or -1 on timeout. */
+/*
+ * wait_level
+ * 概要: 指定した GPIO が target の状態になるまで待ち、経過時間を返す。
+ * 引数:
+ *   pin        - 調べる GPIO 番号
+ *   level      - 待ちたいレベル（0/1）
+ *   timeout_us - タイムアウト時間[us]
+ * 戻り値:
+ *   経過時間[us]。タイムアウトした場合は -1
+ */
 static int wait_level(gpio_num_t pin, int level, int timeout_us) {
     int elapsed = 0;
     while (gpio_get_level(pin) != level) {
@@ -17,6 +26,13 @@ static int wait_level(gpio_num_t pin, int level, int timeout_us) {
     return elapsed;
 }
 
+/*
+ * dht22_init
+ * 概要: DHT22 の通信線をオープンドレイン出力として初期化する。
+ * 役割: 高レベル時に pull-up を有効にして、センサーとの通信に備える。
+ * 引数:
+ *   pin - DHT22 を接続した GPIO 番号
+ */
 void dht22_init(gpio_num_t pin) {
     gpio_config_t cfg = {
         .pin_bit_mask = 1ULL << pin,
@@ -29,6 +45,15 @@ void dht22_init(gpio_num_t pin) {
     gpio_set_level(pin, 1);
 }
 
+/*
+ * dht22_read
+ * 概要: DHT22 から温度と湿度を1回読み取る。
+ * 役割: 初期化信号を送信し、40bit のデータとチェックサムを受信して解釈する。
+ * 引数:
+ *   pin - DHT22 を接続した GPIO 番号
+ * 戻り値:
+ *   温度・湿度・妥当性を含む dht22_reading_t
+ */
 dht22_reading_t dht22_read(gpio_num_t pin) {
     dht22_reading_t result = { .temperature_c = 0, .humidity_percent = 0, .valid = false };
     uint8_t data[5] = {0};

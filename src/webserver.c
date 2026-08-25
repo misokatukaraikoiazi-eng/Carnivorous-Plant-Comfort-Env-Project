@@ -2,6 +2,10 @@
 #include "sensor_data.h"
 #include <stdio.h>
 
+/*
+ * ダッシュボード画面の HTML を定義する。
+ * ブラウザ側で /data から JSON を取得し、温度・湿度・換気状態を表示する。
+ */
 static const char DASHBOARD_HTML[] =
 "<!DOCTYPE html><html lang='ja'><head><meta charset='UTF-8'>"
 "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -35,11 +39,24 @@ static const char DASHBOARD_HTML[] =
 "});}setInterval(refresh,2000);refresh();"
 "</script></body></html>";
 
+/*
+ * root_get_handler
+ * 概要: 監視ダッシュボードの HTML をクライアントへ返す。
+ * 引数:
+ *   req - HTTP リクエスト情報
+ */
 static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, DASHBOARD_HTML, HTTPD_RESP_USE_STRLEN);
 }
 
+/*
+ * data_get_handler
+ * 概要: 現在のセンサーデータを JSON 形式で返す。
+ * 役割: Web UI が定期的に /data を読み取り、値を更新できるようにする。
+ * 引数:
+ *   req - HTTP リクエスト情報
+ */
 static esp_err_t data_get_handler(httpd_req_t *req) {
     sensor_data_t d;
     sensor_data_get(&d);
@@ -55,6 +72,11 @@ static esp_err_t data_get_handler(httpd_req_t *req) {
     return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
+/*
+ * webserver_start
+ * 概要: Web UI 用の HTTP サーバーを開始する。
+ * 戻り値: 起動した server のハンドル。失敗時は NULL。
+ */
 httpd_handle_t webserver_start(void) {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -67,6 +89,12 @@ httpd_handle_t webserver_start(void) {
     return server;
 }
 
+/*
+ * webserver_stop
+ * 概要: HTTP サーバーを停止し、リソースを解放する。
+ * 引数:
+ *   server - 停止対象の HTTP サーバーのハンドル
+ */
 void webserver_stop(httpd_handle_t server) {
     if (server) {
         httpd_stop(server);

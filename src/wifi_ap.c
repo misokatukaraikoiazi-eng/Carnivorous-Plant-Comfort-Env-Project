@@ -9,6 +9,14 @@
 static bool s_wifi_started = false;
 static bool s_netif_ready = false;
 
+/*
+ * wifi_ap_start
+ * 概要: ESP32 をアクセスポイントモードで起動し、携帯端末が Wi-Fi に接続できるようにする。
+ * 引数:
+ *   ssid     - AP の SSID 名
+ *   password - 接続用パスワード
+ * 備考: まず NVS を初期化し、その後 Wi-Fi ネットワークと AP を設定する。
+ */
 void wifi_ap_start(const char *ssid, const char *password) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -42,6 +50,11 @@ void wifi_ap_start(const char *ssid, const char *password) {
     s_wifi_started = true;
 }
 
+/*
+ * wifi_ap_stop
+ * 概要: AP モードを停止して Wi-Fi を切断する。
+ * 役割: エネルギー節約やモード切り替え直前にネットワークを閉じる。
+ */
 void wifi_ap_stop(void) {
     if (!s_wifi_started) {
         return;
