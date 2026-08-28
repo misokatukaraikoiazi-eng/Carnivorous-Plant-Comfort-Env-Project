@@ -40,6 +40,13 @@
 #define WIFI_SSID     "Terrarium-Monitor"
 #define WIFI_PASSWORD "password123"
 
+/* Set to 0 after confirming the dashboard update path. */
+#define USE_SIMULATED_SENSOR_VALUES 1
+#define SIMULATED_AIR_TEMP_C        24.8f
+#define SIMULATED_HUMIDITY_PERCENT  68.0f
+#define SIMULATED_WATER_TEMP_C      23.7f
+#define SIMULATED_SOIL_RAW          2800
+
 static const char *TAG = "terrarium";
 
 static adc_oneshot_unit_handle_t s_adc_handle;
@@ -112,6 +119,16 @@ static void adc_init(void) {
  *   out - 読み取った値を格納する sensor_data_t のポインタ
  */
 static void read_all_sensors(sensor_data_t *out) {
+#if USE_SIMULATED_SENSOR_VALUES
+    out->air_temp_c = SIMULATED_AIR_TEMP_C;
+    out->humidity_percent = SIMULATED_HUMIDITY_PERCENT;
+    out->water_temp_c = SIMULATED_WATER_TEMP_C;
+    out->soil_raw = SIMULATED_SOIL_RAW;
+    out->soil_dry = false;
+    ESP_LOGW(TAG, "Using simulated sensor values");
+    return;
+#endif
+
     dht22_reading_t dht = dht22_read(PIN_DHT);
     if (dht.valid) {
         out->air_temp_c = dht.temperature_c;
@@ -218,17 +235,14 @@ static void update_soil_warning_led(const sensor_data_t *data) {
  *   - この関数は通常終了しない
  */
 static void run_ac_adapter_mode(void) {
-    ESP_LOGI(TAG, "AC Adapter Mode (continuous)");
-    wifi_ap_start(WIFI_SSID, WIFI_PASSWORD);
-    webserver_start();
+    ESP_LOGI(TAG, "AC Adapter Mode (serial sensor debug)");
 
     sensor_data_t data = {0};
     read_all_sensors(&data);
     sensor_data_set(&data);
-    /* Initialize pump cycle state */
-    /* センサーの値をデバッグする */
-    ESP_LOGI(TAG, "Initial sensor data: water_temp_c=%.1f, soil_raw=%d",
-             data.water_temp_c, data.soil_raw);
+    ESP_LOGI(TAG, "air=%.1f C, humidity=%.1f %%, water=%.1f C, soil_raw=%d, soil_dry=%s",
+             data.air_temp_c, data.humidity_percent, data.water_temp_c,
+             data.soil_raw, data.soil_dry ? "true" : "false");
 
     g_pump_cycle_start_ms = now_ms();
     g_pump_cycle_phase_on = false;
@@ -237,9 +251,13 @@ static void run_ac_adapter_mode(void) {
 
     while (1) {
         int64_t now = now_ms();
+        ESP_LOGD(TAG, "Main loop iteration at %" PRIi64 " ms", now);
         if (now - last_sensor_read_ms >= 2000) {
             last_sensor_read_ms = now;
             read_all_sensors(&data);
+            ESP_LOGI(TAG, "air=%.1f C, humidity=%.1f %%, water=%.1f C, soil_raw=%d, soil_dry=%s",
+                     data.air_temp_c, data.humidity_percent, data.water_temp_c,
+                     data.soil_raw, data.soil_dry ? "true" : "false");
         }
         update_water_safety_control(&data);
         update_pump_cycle(&data);
