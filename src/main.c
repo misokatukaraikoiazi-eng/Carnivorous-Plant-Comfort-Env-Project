@@ -15,7 +15,7 @@
 
 /* ---------------- Pin Assignments ---------------- */
 #define PIN_SOIL_MOISTURE  ADC_CHANNEL_6    /* GPIO34 on ADC_UNIT_1: capacitive soil moisture sensor v1.2 */
-#define PIN_DHT            GPIO_NUM_26      /* DHT22 temperature/humidity sensor */
+#define PIN_DHT            GPIO_NUM_26      /* DHT22 temperature/humidity sensor (wiring: GPIO26) */
 #define PIN_WATER_TEMP     GPIO_NUM_25      /* DS18B20 waterproof water temp sensor */
 #define PIN_PUMP           GPIO_NUM_18      /* MOSFET1 -> submersible pump */
 #define PIN_FAN            GPIO_NUM_19      /* MOSFET2 -> cooling fan */
@@ -41,7 +41,7 @@
 #define WIFI_PASSWORD "password123"
 
 /* Set to 0 after confirming the dashboard update path. */
-#define USE_SIMULATED_SENSOR_VALUES 1
+#define USE_SIMULATED_SENSOR_VALUES 0
 #define SIMULATED_AIR_TEMP_C        24.8f
 #define SIMULATED_HUMIDITY_PERCENT  68.0f
 #define SIMULATED_WATER_TEMP_C      23.7f
@@ -92,6 +92,24 @@ static void gpio_outputs_init(void) {
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&sw_cfg);
+
+    /* Self-test output peripherals at startup */
+    ESP_LOGI(TAG, "--- Output Pin Self-Test Start ---");
+    ESP_LOGI(TAG, "Testing LED (GPIO %d)...", PIN_LED);
+    gpio_set_level(PIN_LED, 1);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_set_level(PIN_LED, 0);
+
+    ESP_LOGI(TAG, "Testing FAN (GPIO %d)...", PIN_FAN);
+    gpio_set_level(PIN_FAN, 1);
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    gpio_set_level(PIN_FAN, 0);
+
+    ESP_LOGI(TAG, "Testing PUMP (GPIO %d)...", PIN_PUMP);
+    gpio_set_level(PIN_PUMP, 1);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_set_level(PIN_PUMP, 0);
+    ESP_LOGI(TAG, "--- Output Pin Self-Test End ---");
 }
 
 /*
@@ -157,6 +175,7 @@ static void read_all_sensors(sensor_data_t *out) {
  *   data - 現在のセンサーデータを参照・更新するポインタ
  */
 static void update_water_safety_control(sensor_data_t *data) {
+    bool prev_overheat = g_water_overheat;
     if (data->water_temp_c >= WATER_TEMP_HIGH) {
         g_water_overheat = true;
     } else if (data->water_temp_c <= WATER_TEMP_SAFE) {
@@ -166,6 +185,12 @@ static void update_water_safety_control(sensor_data_t *data) {
 
     data->fan_on = g_water_overheat;
     gpio_set_level(PIN_FAN, data->fan_on ? 1 : 0);
+
+    if (prev_overheat != g_water_overheat) {
+        ESP_LOGI(TAG, "Water overheat state changed: %s (water_temp=%.1f C), FAN pin level=%d",
+                 g_water_overheat ? "OVERHEAT (FAN ON)" : "NORMAL (FAN OFF)",
+                 data->water_temp_c, data->fan_on ? 1 : 0);
+    }
 
     if (g_water_overheat) {
         data->pump_on = false;
@@ -255,9 +280,10 @@ static void run_ac_adapter_mode(void) {
         if (now - last_sensor_read_ms >= 2000) {
             last_sensor_read_ms = now;
             read_all_sensors(&data);
-            ESP_LOGI(TAG, "air=%.1f C, humidity=%.1f %%, water=%.1f C, soil_raw=%d, soil_dry=%s",
+            ESP_LOGI(TAG, "air=%.1f C, humidity=%.1f %%, water=%.1f C, soil_raw=%d, soil_dry=%s | FAN=%s, PUMP=%s",
                      data.air_temp_c, data.humidity_percent, data.water_temp_c,
-                     data.soil_raw, data.soil_dry ? "true" : "false");
+                     data.soil_raw, data.soil_dry ? "true" : "false",
+                     data.fan_on ? "ON" : "OFF", data.pump_on ? "ON" : "OFF");
         }
         update_water_safety_control(&data);
         update_pump_cycle(&data);
