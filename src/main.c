@@ -37,6 +37,9 @@
 #define AP_GRACE_PERIOD_MS (15UL * 1000UL)
 #define FAN_COOLING_MS     (5UL  * 60UL * 1000UL)
 #define DEEP_SLEEP_US      (30ULL * 60ULL * 1000000ULL)
+#define WIFI_TASK_CORE      1
+#define WIFI_TASK_STACK_SIZE 4096
+#define WIFI_TASK_PRIORITY  5
 
 #define WIFI_SSID     "Terrarium-Monitor"
 #define WIFI_PASSWORD "password123"
@@ -56,6 +59,13 @@ static bool g_pump_cycle_phase_on = false;
 static int64_t g_pump_cycle_start_ms = 0;
 static bool g_led_state = false;
 static int64_t g_last_led_toggle_ms = 0;
+
+typedef struct {
+    bool stop_after_grace_period;
+    TaskHandle_t completion_task;
+} wifi_task_config_t;
+
+static wifi_task_config_t s_wifi_task_config;
 /*
  * now_ms
  * 概要: ESP32 の起動時刻からの経過時間をミリ秒単位で取得する。
@@ -251,6 +261,40 @@ static void update_soil_warning_led(const sensor_data_t *data) {
     }
 }
 
+static void wifi_task(void *arg) {
+    const wifi_task_config_t *config = arg;
+
+    wifi_ap_start(WIFI_SSID, WIFI_PASSWORD);
+    httpd_handle_t server = webserver_start();
+
+    if (!config->stop_after_grace_period) {
+        vTaskDelete(NULL);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(AP_GRACE_PERIOD_MS));
+    webserver_stop(server);
+    wifi_ap_stop();
+    xTaskNotifyGive(config->completion_task);
+    vTaskDelete(NULL);
+}
+
+static void start_wifi_task(bool stop_after_grace_period, TaskHandle_t completion_task) {
+    s_wifi_task_config = (wifi_task_config_t) {
+        .stop_after_grace_period = stop_after_grace_period,
+        .completion_task = completion_task,
+    };
+
+    BaseType_t created = xTaskCreatePinnedToCore(
+        wifi_task,
+        "wifi_task",
+        WIFI_TASK_STACK_SIZE,
+        &s_wifi_task_config,
+        WIFI_TASK_PRIORITY,
+        NULL,
+        WIFI_TASK_CORE);
+    ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_FAIL);
+}
+
 /*
  * run_ac_adapter_mode
  * 概要: AC電源モードでの常時監視・制御ループを実行する。
@@ -262,6 +306,7 @@ static void update_soil_warning_led(const sensor_data_t *data) {
  */
 static void run_ac_adapter_mode(void) {
     ESP_LOGI(TAG, "AC Adapter Mode (serial sensor debug)");
+    start_wifi_task(false, NULL);
 
     sensor_data_t data = {0};
     read_all_sensors(&data);
@@ -308,15 +353,8 @@ static void run_mobile_battery_mode_once(void) {
     ESP_LOGI(TAG, "Mobile Battery Mode (deep sleep cycle)");
 
     /* Grace period: allow emergency data reading via SoftAP for 15 seconds. */
-    wifi_ap_start(WIFI_SSID, WIFI_PASSWORD);
-    httpd_handle_t server = webserver_start();
-
-    int64_t ap_start = now_ms();
-    while (now_ms() - ap_start < AP_GRACE_PERIOD_MS) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    webserver_stop(server);
-    wifi_ap_stop();
+    start_wifi_task(true, xTaskGetCurrentTaskHandle());
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     sensor_data_t data = {0};
     read_all_sensors(&data);
