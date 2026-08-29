@@ -10,6 +10,7 @@
 #include "dht22.h"
 #include "ds18b20.h"
 #include "sensor_data.h"
+#include "sh1106.h"
 #include "webserver.h"
 #include "wifi_ap.h"
 
@@ -289,6 +290,7 @@ static void run_ac_adapter_mode(void) {
         update_pump_cycle(&data);
         update_soil_warning_led(&data);
         sensor_data_set(&data);
+        sh1106_display_sensor_data(&data, true);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -325,12 +327,18 @@ static void run_mobile_battery_mode_once(void) {
     bool overheat = (data.water_temp_c >= WATER_TEMP_HIGH);
     if (overheat) {
         ESP_LOGI(TAG, "Water overheat detected -> cooling fan 5 min");
+        data.fan_on = true;
+        sh1106_display_sensor_data(&data, false);
         gpio_set_level(PIN_FAN, 1);
         vTaskDelay(pdMS_TO_TICKS(FAN_COOLING_MS));
         gpio_set_level(PIN_FAN, 0);
+        data.fan_on = false;
     } else {
+        data.fan_on = false;
         gpio_set_level(PIN_FAN, 0);
     }
+
+    sh1106_display_sensor_data(&data, false);
 
     ESP_LOGI(TAG, "Entering deep sleep for 30 minutes");
     esp_sleep_enable_timer_wakeup(DEEP_SLEEP_US);
@@ -351,6 +359,8 @@ void app_main(void) {
     dht22_init(PIN_DHT);
     ds18b20_init(PIN_WATER_TEMP);
     sensor_data_init();
+
+    sh1106_init(SH1106_I2C_SDA_PIN, SH1106_I2C_SCL_PIN, SH1106_I2C_ADDR);
 
     bool is_ac_mode = (gpio_get_level(PIN_MODE_SWITCH) == 0);
 

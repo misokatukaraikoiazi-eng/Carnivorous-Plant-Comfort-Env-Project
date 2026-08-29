@@ -14,6 +14,8 @@ PlatformIO + ESP-IDF (C言語) で実装。
 | 19 | MOSFET2: 冷却ファン |
 | 23 | 赤色警告LED |
 | 27 | 動作モード切替スイッチ (LOW=ACアダプター常時稼働 / HIGH=モバイルバッテリー省電力) |
+| 21 | SH1106 OLED ディスプレイ (I2C SDA) |
+| 22 | SH1106 OLED ディスプレイ (I2C SCL) |
 
 ## ファイル構成
 
@@ -26,6 +28,7 @@ src/
   main.c                 # app_main、モード判定、センサー/アクチュエーター制御ループ
   dht22.c / dht22.h       # DHT22 ビットバンギング読み取り
   ds18b20.c / ds18b20.h   # OneWire + DS18B20 読み取り
+  sh1106.c / sh1106.h     # SH1106 I2C OLED ディスプレイ表示制御
   wifi_ap.c / wifi_ap.h   # Wi-Fi SoftAP 起動/停止
   webserver.c / webserver.h # HTTPダッシュボード (HTML/JSON)
   sensor_data.c / sensor_data.h # ミューテックス保護された共有センサー状態
