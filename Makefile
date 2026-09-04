@@ -4,7 +4,7 @@ BUILD_DIR := .pio/build/$(ENV)
 MERGED_BIN := build/terrarium-flash.bin
 ESPTOOL ?= $(HOME)/.platformio/packages/tool-esptoolpy/esptool.py
 
-.PHONY: all build upload monitor clean erase menuconfig merge
+.PHONY: all build upload upload-merged monitor clean erase menuconfig merge
 
 all: build
 
@@ -13,6 +13,9 @@ build:
 
 upload:
 	$(PIO) run -e $(ENV) -t upload
+
+upload-merged: merge
+	$(ESPTOOL) --chip esp32 --port "$(PORT)" --baud 460800 write_flash 0x0 $(MERGED_BIN)
 
 monitor:
 	$(PIO) device monitor -e $(ENV)

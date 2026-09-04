@@ -162,20 +162,24 @@ bool sh1106_init(gpio_num_t sda_pin, gpio_num_t scl_pin, uint8_t i2c_addr) {
 
     static const uint8_t init_cmds[] = {
         0xAE,       /* Display OFF */
-        0x02,       /* Set low column address (offset 2 for SH1106) */
-        0x10,       /* Set high column address */
-        0x40,       /* Set start line address */
-        0xB0,       /* Set page address */
-        0x81, 0xCF, /* Set contrast control */
-        0xA1,       /* Set Segment Re-map */
-        0xA6,       /* Normal display */
-        0xA8, 0x3F, /* Multiplex Ratio (1/64) */
-        0xAD, 0x8B, /* Set Charge Pump / DC-DC enable */
-        0xC8,       /* Set COM Output Scan Direction */
-        0xD3, 0x00, /* Set Display Offset */
         0xD5, 0x80, /* Set Display Clock Divide Ratio */
-        0xD9, 0x1F, /* Set Pre-charge Period */
+        0xA8, 0x3F, /* Multiplex Ratio (1/64) */
+        0xD3, 0x00, /* Set Display Offset = 0 */
+        0x40,       /* Set start line address = 0 */
+        0x8D, 0x14, /* Enable Charge Pump (SSD1306) */
+        0xAD, 0x8B, /* Enable DC-DC (SH1106) */
+        0x20, 0x02, /* Page Addressing Mode (SSD1306) */
+        0x00,       /* Set low column address = 0 (SSD1306) */
+        0x10,       /* Set high column address = 0 */
+        0xB0,       /* Set page address = 0 */
+        0xA1,       /* Set Segment Re-map */
+        0xC8,       /* Set COM Output Scan Direction */
         0xDA, 0x12, /* Set COM Pins Hardware Config */
+        0x81, 0xCF, /* Set contrast control */
+        0xD9, 0xF1, /* Set Pre-charge Period */
+        0xDB, 0x40, /* Set VCOMH Deselect Level */
+        0xA4,       /* Entire Display ON (Resume to RAM) */
+        0xA6,       /* Normal display */
         0xAF        /* Display ON */
     };
 
@@ -218,7 +222,7 @@ void sh1106_draw_string(uint8_t row, uint8_t x, const char *str) {
 void sh1106_update(void) {
     for (uint8_t page = 0; page < 8; page++) {
         send_cmd(0xB0 | page); /* Set page */
-        send_cmd(0x02);        /* Set lower column address offset = 2 */
+        send_cmd(0x00);        /* Set lower column address offset = 0 (SSD1306/SH1106) */
         send_cmd(0x10);        /* Set higher column address offset = 0 */
         send_data(&s_buffer[page * 128], 128);
     }

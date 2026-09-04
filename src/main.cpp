@@ -23,7 +23,6 @@ namespace {
 
 constexpr gpio_num_t PIN_DHT = GPIO_NUM_26;
 constexpr gpio_num_t PIN_WATER_TEMP = GPIO_NUM_25;
-constexpr gpio_num_t PIN_PUMP = GPIO_NUM_18;
 constexpr gpio_num_t PIN_FAN = GPIO_NUM_19;
 constexpr gpio_num_t PIN_WARNING_LED = GPIO_NUM_23;
 constexpr gpio_num_t PIN_MODE_SWITCH = GPIO_NUM_27;
@@ -37,9 +36,7 @@ constexpr float DEFAULT_WATER_TEMP_HIGH_C = 28.0F;
 constexpr float DEFAULT_WATER_TEMP_SAFE_C = 26.5F;
 constexpr int32_t DEFAULT_SOIL_DRY_THRESHOLD = 2200;
 constexpr uint32_t PWM_FREQUENCY_HZ = 25000;
-constexpr uint32_t PWM_DUTY_MAX = 8191;  // LEDC 13 bit
-constexpr uint32_t PUMP_ON_MS = 5UL * 60UL * 1000UL;
-constexpr uint32_t PUMP_OFF_MS = 30UL * 60UL * 1000UL;
+constexpr uint32_t PWM_DUTY_MAX = 1023;  // LEDC 10 bit
 constexpr uint32_t WIFI_GRACE_PERIOD_MS = 15UL * 1000UL;
 constexpr uint32_t FAN_COOLING_MS = 5UL * 60UL * 1000UL;
 constexpr uint64_t DEEP_SLEEP_US = 30ULL * 60ULL * 1000000ULL;
@@ -57,8 +54,6 @@ Settings settings = {DEFAULT_WATER_TEMP_HIGH_C, DEFAULT_WATER_TEMP_SAFE_C,
                      DEFAULT_SOIL_DRY_THRESHOLD};
 adc_oneshot_unit_handle_t adc_handle = nullptr;
 bool water_overheat = false;
-bool pump_phase_on = false;
-int64_t pump_phase_started_ms = 0;
 bool warning_led_on = false;
 int64_t last_led_toggle_ms = 0;
 
@@ -135,18 +130,18 @@ void save_settings_to_nvs() {
     ESP_LOGI(TAG, "Settings saved to NVS");
 }
 
-/* ポンプ、ファン、警告LEDは同じLEDC方式で初期化し、必要時だけデューティを上げる。 */
+/* ファンと警告LEDはLEDCで制御する。ポンプはゲートへ直接GPIOを出力する。 */
 void ledc_init() {
     ledc_timer_config_t timer = {};
     timer.speed_mode = LEDC_LOW_SPEED_MODE;
-    timer.duty_resolution = LEDC_TIMER_13_BIT;
+    timer.duty_resolution = LEDC_TIMER_10_BIT;
     timer.timer_num = LEDC_TIMER_0;
     timer.freq_hz = PWM_FREQUENCY_HZ;
     timer.clk_cfg = LEDC_AUTO_CLK;
     ESP_ERROR_CHECK(ledc_timer_config(&timer));
 
-    const gpio_num_t pins[] = {PIN_PUMP, PIN_FAN, PIN_WARNING_LED};
-    for (int channel = 0; channel < 3; ++channel) {
+    const gpio_num_t pins[] = {PIN_FAN, PIN_WARNING_LED};
+    for (int channel = 0; channel < 2; ++channel) {
         ledc_channel_config_t config = {};
         config.gpio_num = pins[channel];
         config.speed_mode = LEDC_LOW_SPEED_MODE;
@@ -182,7 +177,6 @@ void hardware_init() {
     ESP_ERROR_CHECK(gpio_config(&button_config));
 
     ledc_init();
-
     adc_oneshot_unit_init_cfg_t adc_config = {};
     adc_config.unit_id = ADC_UNIT_1;
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&adc_config, &adc_handle));
@@ -202,10 +196,15 @@ void hardware_init() {
 
 /* センサー読み取りは制御タスクだけが担当し、Web表示側とは共有データ経由で同期する。 */
 void read_sensors(sensor_data_t *data) {
-    dht22_reading_t dht = dht22_read(PIN_DHT);
-    if (dht.valid) {
-        data->air_temp_c = dht.temperature_c;
-        data->humidity_percent = dht.humidity_percent;
+    static int64_t last_dht_read_ms = -2000;
+    const int64_t current_ms = now_ms();
+    if (current_ms - last_dht_read_ms >= 2000) {
+        last_dht_read_ms = current_ms;
+        dht22_reading_t dht = dht22_read(PIN_DHT);
+        if (dht.valid) {
+            data->air_temp_c = dht.temperature_c;
+            data->humidity_percent = dht.humidity_percent;
+        }
     }
 
     float water_temp = 0.0F;
@@ -227,19 +226,9 @@ void update_control(sensor_data_t *data) {
         water_overheat = false;
     }
 
-    data->fan_on = water_overheat;
-    set_pwm(LEDC_CHANNEL_1, data->fan_on);
-
-    const int64_t elapsed = now_ms() - pump_phase_started_ms;
-    if (pump_phase_on && elapsed >= PUMP_ON_MS) {
-        pump_phase_on = false;
-        pump_phase_started_ms = now_ms();
-    } else if (!pump_phase_on && elapsed >= PUMP_OFF_MS) {
-        pump_phase_on = true;
-        pump_phase_started_ms = now_ms();
-    }
-    data->pump_on = pump_phase_on && !water_overheat;
-    set_pwm(LEDC_CHANNEL_0, data->pump_on);
+    /* 一旦、ファンとポンプは常時ONにする */
+    data->fan_on = true;
+    set_pwm(LEDC_CHANNEL_0, true);
 
     if (!data->soil_dry) {
         warning_led_on = false;
@@ -247,7 +236,7 @@ void update_control(sensor_data_t *data) {
         warning_led_on = !warning_led_on;
         last_led_toggle_ms = now_ms();
     }
-    set_pwm(LEDC_CHANNEL_2, warning_led_on);
+    set_pwm(LEDC_CHANNEL_1, warning_led_on);
 }
 
 /* 50ms以上状態が変わらなかった押下だけを、1回のボタンイベントとして返す。 */
@@ -348,7 +337,6 @@ void update_settings_ui(const sensor_data_t *data, bool sensor_updated) {
 /* AC電源時はセンサーと制御を1秒周期、ボタンと画面を50ms周期で処理する。 */
 void control_task(void *) {
     sensor_data_t data = {};
-    pump_phase_started_ms = now_ms();
     int64_t last_sensor_read_ms = 0;
     while (true) {
         bool sensor_updated = false;
@@ -391,16 +379,15 @@ void run_battery_cycle() {
 
     sensor_data_t data = {};
     read_sensors(&data);
-    data.pump_on = false;
-    set_pwm(LEDC_CHANNEL_0, false);
-    data.fan_on = data.water_temp_c >= settings.water_temp_high_c;
-    set_pwm(LEDC_CHANNEL_1, data.fan_on);
+    /* テスト用: モバイルバッテリーモード時もポンプとファンをON */
+    data.fan_on = true;
+    set_pwm(LEDC_CHANNEL_0, true);
     sensor_data_set(&data);
     sh1106_display_sensor_data(&data, false);
 
     if (data.fan_on) {
         vTaskDelay(pdMS_TO_TICKS(FAN_COOLING_MS));
-        set_pwm(LEDC_CHANNEL_1, false);
+        set_pwm(LEDC_CHANNEL_0, false);
     }
     esp_sleep_enable_timer_wakeup(DEEP_SLEEP_US);
     esp_deep_sleep_start();

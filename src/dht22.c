@@ -7,7 +7,7 @@
 
 /*
  * wait_level
- * 概要: 指定した GPIO が target の状態になるまで待ち、経過時間を返す。
+ * 概要: 指定した GPIO が target の状態になるまで待ち、経過時間[us]を返す。
  * 引数:
  *   pin        - 調べる GPIO 番号
  *   level      - 待ちたいレベル（0/1）
@@ -83,6 +83,7 @@ dht22_reading_t dht22_read(gpio_num_t pin) {
         ESP_LOGW("DHT22", "Timeout waiting for response HIGH");
         return result;
     }
+
     if (wait_level(pin, 0, 200) < 0) {
         portEXIT_CRITICAL(&mux);
         ESP_LOGW("DHT22", "Timeout waiting for first data LOW");
@@ -95,17 +96,28 @@ dht22_reading_t dht22_read(gpio_num_t pin) {
             ESP_LOGW("DHT22", "Timeout waiting for bit %d HIGH", i);
             return result;
         }
-        int high_us = wait_level(pin, 0, 100);
-        if (high_us < 0) {
-            portEXIT_CRITICAL(&mux);
-            ESP_LOGW("DHT22", "Timeout waiting for bit %d LOW", i);
-            return result;
+        int high_us;
+        if (i < 39) {
+            high_us = wait_level(pin, 0, 100);
+            if (high_us < 0) {
+                portEXIT_CRITICAL(&mux);
+                ESP_LOGW("DHT22", "Timeout waiting for bit %d LOW", i);
+                return result;
+            }
+        } else {
+            esp_rom_delay_us(40);
+            high_us = gpio_get_level(pin) ? 70 : 26;
         }
         uint8_t bit = (high_us > 40) ? 1 : 0; /* ~26-28us = 0, ~70us = 1 */
         data[i / 8] = (uint8_t)((data[i / 8] << 1) | bit);
     }
 
     portEXIT_CRITICAL(&mux);
+
+    for (int i = 4; i > 0; i--) {
+        data[i] = (uint8_t)((data[i] >> 1) | (data[i - 1] << 7));
+    }
+    data[0] >>= 1;
 
     uint8_t checksum = (uint8_t)(data[0] + data[1] + data[2] + data[3]);
     if (checksum != data[4]) {
@@ -121,6 +133,7 @@ dht22_reading_t dht22_read(gpio_num_t pin) {
     if (data[2] & 0x80) {
         temp = -temp;
     }
+
     result.temperature_c = temp;
     result.valid = true;
     return result;

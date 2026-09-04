@@ -7,7 +7,7 @@
 
 #define SH1106_I2C_SDA_PIN GPIO_NUM_21
 #define SH1106_I2C_SCL_PIN GPIO_NUM_22
-#define SH1106_I2C_ADDR    0x3C
+#define SH1106_I2C_ADDR    0x3C  /* 8bit表記の 0x78 は 7bit アドレスで 0x3C (0x78 >> 1) */
 
 /*
  * sh1106_init
